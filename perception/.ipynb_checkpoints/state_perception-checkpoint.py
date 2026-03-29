@@ -27,6 +27,8 @@ class StatePerception(BasePerception):
         确保 StatePerception 和 VisionPerception 可以无缝替换。
         """
         raw = self._env.unwrapped.get_privileged_state()
+        for obj in raw["objects"]:
+            print(obj["id"], obj["dimensions"], obj["pose"][:3, 3])
 
         # ── 构建 ObjectInfo 列表 ──────────────────────────────────────────
         objects = []

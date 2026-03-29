@@ -9,7 +9,7 @@ import sapien
 import torch
 from scipy.spatial.transform import Rotation
 
-from mani_skill.envs.sapien_env import BaseEnv          # ← 直接继承 BaseEnv
+from mani_skill.envs.sapien_env import BaseEnv
 from mani_skill.utils.building import actors
 from mani_skill.utils.registration import register_env
 from mani_skill.utils.scene_builder.table import TableSceneBuilder
@@ -20,20 +20,11 @@ from mani_skill.utils import sapien_utils
 
 from .scene_config import SceneConfig, load_scene_config
 
-# 默认配置文件路径（相对于项目根目录）
 _DEFAULT_CONFIG = Path(__file__).parent.parent / "config" / "scene.yaml"
 
 
 @register_env("MultiObjectPickAndPlace-v1", max_episode_steps=500)
-class MultiObjectPickAndPlaceEnv(BaseEnv):           # ✅ 直接继承 BaseEnv
-    """
-    多物体 pick-and-place 环境。
-
-    特性：
-      - 直接继承 BaseEnv，完全避免父类幽灵物体问题
-      - 物体类型、数量、几何、颜色全部由 YAML 配置文件控制
-      - 支持运行时传入 SceneConfig 对象覆盖文件配置
-    """
+class MultiObjectPickAndPlaceEnv(BaseEnv):
 
     SUPPORTED_ROBOTS = ["panda", "fetch"]
     agent: Panda
@@ -43,12 +34,11 @@ class MultiObjectPickAndPlaceEnv(BaseEnv):           # ✅ 直接继承 BaseEnv
         *args,
         robot_uids: str = "panda",
         robot_init_qpos_noise: float = 0.02,
-        scene_config: SceneConfig | str | Path | None = None,  # ← 核心参数
+        scene_config: SceneConfig | str | Path | None = None,
         **kwargs,
     ):
         self.robot_init_qpos_noise = robot_init_qpos_noise
 
-        # ── 加载场景配置（优先级：传入对象 > 传入路径 > 默认文件）──────────
         if isinstance(scene_config, SceneConfig):
             self.scene_cfg = scene_config
         elif scene_config is not None:
@@ -56,15 +46,23 @@ class MultiObjectPickAndPlaceEnv(BaseEnv):           # ✅ 直接继承 BaseEnv
         else:
             self.scene_cfg = load_scene_config(_DEFAULT_CONFIG)
 
-        # ⚠️ 必须在 super().__init__ 之前赋值，因为父类 __init__ 会调用 _load_scene
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
 
-    # ── 相机配置（继承 BaseEnv 时需要自己声明） ───────────────────────────
+    # ── 相机配置 ──────────────────────────────────────────────────────────
 
     @property
     def _default_sensor_configs(self):
-        pose = sapien_utils.look_at(eye=[0.3, 0, 0.6], target=[-0.1, 0, 0.1])
-        return [CameraConfig("base_camera", pose, 128, 128, np.pi / 2, 0.01, 100)]
+        pose = sapien_utils.look_at(
+            eye    = [0.0, -0.2, 0.5],   # 物体区域侧后方
+            target = [-0.22, 0.0, 0.0],  # 对准物体生成区域中心
+        )
+        return [CameraConfig(
+            "base_camera",
+            pose,
+            128, 128,
+            np.pi / 3,  # 60° FOV
+            0.01, 100,
+        )]
 
     @property
     def _default_human_render_camera_configs(self):
@@ -79,19 +77,16 @@ class MultiObjectPickAndPlaceEnv(BaseEnv):           # ✅ 直接继承 BaseEnv
     # ── 场景构建 ──────────────────────────────────────────────────────────
 
     def _load_scene(self, options: dict):
-        # ① 桌子 + 机器人（TableSceneBuilder 是唯一入口，不走 PickCubeEnv）
         self.table_scene = TableSceneBuilder(
             self, robot_init_qpos_noise=self.robot_init_qpos_noise
         )
         self.table_scene.build()
 
-        # ② 根据配置动态创建物体
         self.objects: List[sapien.Entity] = []
         for obj_cfg in self.scene_cfg.objects:
             actor = self._build_object(obj_cfg)
             self.objects.append(actor)
 
-        # ③ 目标区域标记（静态，仅视觉）
         ta = self.scene_cfg.target_area
         self.target_region = self._build_thin_box(
             half_size=[ta.half[0], ta.half[1], 0.001],
@@ -100,11 +95,13 @@ class MultiObjectPickAndPlaceEnv(BaseEnv):           # ✅ 直接继承 BaseEnv
         )
 
     def _build_object(self, obj_cfg) -> sapien.Entity:
-        """根据 ObjectConfig 分发到对应的 builder"""
+        """根据 ObjectConfig.category 分发到对应的 builder"""
         if obj_cfg.category == "box":
             return self._build_box(obj_cfg)
         elif obj_cfg.category == "cylinder":
             return self._build_cylinder(obj_cfg)
+        elif obj_cfg.category == "ycb":                  # ← 新增分支
+            return self._build_ycb(obj_cfg)
         else:
             raise ValueError(f"不支持的 category: {obj_cfg.category}")
 
@@ -131,10 +128,17 @@ class MultiObjectPickAndPlaceEnv(BaseEnv):           # ✅ 直接继承 BaseEnv
         )
         return builder.build(name=obj_cfg.id)
 
+    def _build_ycb(self, obj_cfg) -> sapien.Entity:
+        builder = actors.get_actor_builder(
+            self.scene,
+            id=f"ycb:{obj_cfg.model_id}",
+        )
+        builder.initial_pose = sapien.Pose(p=[0, 0, 0])  # 与官方对齐，不再用 0.5
+        return builder.build(name=obj_cfg.id)
+
     def _build_thin_box(self, half_size, color, name) -> sapien.Entity:
-        """创建静态薄片（目标区域地标用）"""
         builder = self.scene.create_actor_builder()
-        builder.initial_pose = sapien.Pose(p=[0, 0, -1])   # 场景外等待
+        builder.initial_pose = sapien.Pose(p=[0, 0, -1])
         builder.add_box_collision(half_size=half_size)
         builder.add_box_visual(
             half_size=half_size,
@@ -142,12 +146,45 @@ class MultiObjectPickAndPlaceEnv(BaseEnv):           # ✅ 直接继承 BaseEnv
         )
         return builder.build_static(name=name)
 
+    # ── YCB z_offset 精确计算 ─────────────────────────────────────────────
+
+    def _after_reconfigure(self, options: dict):
+        for actor, obj_cfg in zip(self.objects, self.scene_cfg.objects):
+            if obj_cfg.category != "ycb":
+                continue
+            try:
+                mesh   = actor.get_first_collision_mesh()  # to_world_frame=True，initial_pose=[0,0,0]
+                bounds = mesh.bounding_box.bounds          # (2, 3)，此时等价于局部坐标系
+    
+                # 真实尺寸
+                obj_cfg._dimensions_cache = (
+                    bounds[1] - bounds[0]
+                ).astype(np.float32)
+    
+                # 质心偏移：局部坐标系下几何中心相对于 mesh 原点的偏移
+                obj_cfg._centroid_offset_cache = (
+                    (bounds[0] + bounds[1]) / 2
+                ).astype(np.float32)
+    
+                # 自动 z_offset：底部贴桌面，仅在没有手动 override 时计算
+                if obj_cfg.z_offset_override is None:
+                    obj_cfg.z_offset_override = float(-bounds[0, 2])
+    
+                print(f"[_after_reconfigure] {obj_cfg.id}: "
+                      f"dims={obj_cfg._dimensions_cache.round(4)}, "
+                      f"centroid_offset={obj_cfg._centroid_offset_cache.round(4)}, "
+                      f"z_offset={obj_cfg.z_offset_override:.4f}")
+    
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+
     # ── Episode 初始化 ────────────────────────────────────────────────────
 
     def _initialize_episode(self, env_idx: torch.Tensor, options: dict):
         with torch.device(self.device):
             b = len(env_idx)
-            self.table_scene.initialize(env_idx)     # ✅ 只调这一句，不走父类
+            self.table_scene.initialize(env_idx)
 
             table_z = self._get_table_surface_z()
             ta = self.scene_cfg.target_area
@@ -177,7 +214,7 @@ class MultiObjectPickAndPlaceEnv(BaseEnv):           # ✅ 直接继承 BaseEnv
     # ── 工具方法 ──────────────────────────────────────────────────────────
 
     def _get_table_surface_z(self) -> float:
-        return 0.0   # ManiSkill TableSceneBuilder 默认桌面 z=0
+        return 0.0
 
     def _sample_valid_position(
         self,
@@ -191,11 +228,9 @@ class MultiObjectPickAndPlaceEnv(BaseEnv):           # ✅ 直接继承 BaseEnv
             y = np.random.uniform(*sp.y_range)
             pos = np.array([x, y])
 
-            # 不能落在目标区域内（带 margin）
             if np.all(np.abs(pos - ta.center) <= ta.half + 0.03):
                 continue
 
-            # 与已放置物体保持最小间距
             if any(np.linalg.norm(pos - ep) < sp.min_distance for ep in existing):
                 continue
 
@@ -215,7 +250,6 @@ class MultiObjectPickAndPlaceEnv(BaseEnv):           # ✅ 直接继承 BaseEnv
     # ── 奖励 ──────────────────────────────────────────────────────────────
 
     def evaluate(self):
-        """ManiSkill BaseEnv 要求实现 evaluate()，返回 success tensor"""
         success = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
         for actor in self.objects:
             in_target = self._batch_in_target_area(actor.pose.p[:, :2])
@@ -237,25 +271,36 @@ class MultiObjectPickAndPlaceEnv(BaseEnv):           # ✅ 直接继承 BaseEnv
     def get_privileged_state(self) -> Dict[str, Any]:
         table_z = self._get_table_surface_z()
         objects_state = []
-
+    
         for actor, obj_cfg in zip(self.objects, self.scene_cfg.objects):
-            p = actor.pose.p[0].cpu().numpy()
+            p = actor.pose.p[0].cpu().numpy()          # mesh 原点在世界坐标系的位置
             q = actor.pose.q[0].cpu().numpy()          # wxyz
-
+    
             rot = Rotation.from_quat(
-                [q[1], q[2], q[3], q[0]]               # wxyz → xyzw
+                [q[1], q[2], q[3], q[0]]
             ).as_matrix()
+    
+            # ── 质心修正：mesh 原点 → 几何质心 ──────────────────────────────
+            offset = getattr(obj_cfg, "_centroid_offset_cache", None)
+            if offset is not None:
+                # offset 是局部坐标系下的偏移，需要旋转到世界坐标系
+                p = p + rot @ offset.astype(np.float64)
+    
             T = np.eye(4)
             T[:3, :3] = rot
             T[:3, 3]  = p
-
+    
+            dims = getattr(obj_cfg, "_dimensions_cache", None)
+            if dims is None:
+                dims = obj_cfg.dimensions
+    
             objects_state.append({
                 "id":         obj_cfg.id,
                 "category":   obj_cfg.category,
                 "pose":       T,
-                "dimensions": obj_cfg.dimensions,
+                "dimensions": dims,
             })
-
+    
         ta = self.scene_cfg.target_area
         return {
             "objects": objects_state,

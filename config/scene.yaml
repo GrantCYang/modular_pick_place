@@ -3,13 +3,13 @@
 # ─────────────────────────────────────────────
 
 spawn:
-  x_range: [-0.30, -0.15]      # ← 整体左移，与 target 拉开至少 10cm 的安全距离
+  x_range: [-0.30, -0.15]
   y_range: [-0.15, 0.15]
   min_distance: 0.08
 
 target_area:
-  center: [0.02, 0.0]          # ← X 从 0.15 缩到 0.12，整体往机械臂方向收
-  size:   [0.16, 0.14]         # ← 加宽加高，给 3 个物体留足放置空间
+  center: [0.02, 0.0]
+  size:   [0.18, 0.16]
   color:  [1.0, 0.85, 0.0, 0.4]
 
 objects:
@@ -18,12 +18,11 @@ objects:
     half_size: [0.025, 0.025, 0.025]
     color: [0.8, 0.2, 0.2, 1.0]
 
-  - id: cylinder_0
-    category: box                        # 保持你现有策略
-    half_size: [0.02, 0.02, 0.025]
-    color: [0.2, 0.4, 0.8, 1.0]
+  - id: obj_tuna
+    category: ycb
+    model_id: "007_tuna_fish_can"  
 
-  - id: box_1
-    category: box
-    half_size: [0.02, 0.025, 0.03]
-    color: [0.3, 0.8, 0.3, 1.0]
+  - id: obj_orange
+    category: ycb
+    model_id: "017_orange"    # ← YCB mustard bottle
+    color: ~                           # ycb 使用自带贴图，color 忽略
